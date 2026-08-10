@@ -73,6 +73,16 @@ jobs:
       # The build number must increase with every upload or App Store Connect
       # rejects it. github.run_number increments automatically per run, so this
       # can never collide with a previous upload.
+      #
+      # CODE_SIGN_IDENTITY="Apple Distribution" IS LOAD-BEARING. The PWABuilder
+      # project sets CODE_SIGN_IDENTITY = "Apple Development" in the pbxproj.
+      # Left alone, xcodebuild asks Apple for an iOS App DEVELOPMENT profile,
+      # which requires at least one registered device — and run #1 failed with
+      # exactly that: "Your team has no devices from which to generate a
+      # provisioning profile" plus "No profiles for
+      # 'io.github.tallytracker.tally' were found ... iOS App Development".
+      # App Store DISTRIBUTION profiles need no devices, which is the whole
+      # point of building this way. Do not remove this line.
       - name: Archive (signed)
         working-directory: ${{ env.XCODE_DIR }}
         env:
@@ -92,6 +102,7 @@ jobs:
             -authenticationKeyIssuerID "$ISSUER_ID" \
             DEVELOPMENT_TEAM="$TEAM_ID" \
             CODE_SIGN_STYLE=Automatic \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
             CURRENT_PROJECT_VERSION=${{ github.run_number }}
 
       - name: Write ExportOptions.plist
