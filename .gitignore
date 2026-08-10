@@ -1,0 +1,17 @@
+# CocoaPods installs these on the build machine — never commit them.
+src/Pods/
+src/Podfile.lock
+
+# Build output
+src/build/
+DerivedData/
+*.xcarchive
+*.ipa
+
+# Xcode user state (per-machine, not project settings)
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+
+# macOS clutter
+.DS_Store

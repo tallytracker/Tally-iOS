@@ -1,0 +1,89 @@
+## Tally — iOS build smoke test
+##
+## PHASE 1 of the no-Mac pipeline: proves the Xcode project COMPILES on a
+## GitHub-hosted Mac. It does NOT sign the app and does NOT upload anything.
+## Signing and App Store upload come in phase 2, once this is green.
+##
+## Put this file in the new private repo at:  .github/workflows/ios-build.yml
+##
+## Repo layout this expects (repo root = the contents of the "Tally" folder
+## from "14. Tally - App Store Package"):
+##
+##   .github/workflows/ios-build.yml   <- this file
+##   src/Tally.xcworkspace
+##   src/Tally.xcodeproj
+##   src/Tally/...
+##   src/Podfile
+##
+## If you commit the project at a different depth, change XCODE_DIR below.
+
+name: iOS build (smoke test)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:        # lets you press "Run workflow" by hand in the Actions tab
+
+env:
+  XCODE_DIR: src            # folder containing Tally.xcworkspace and the Podfile
+  WORKSPACE: Tally.xcworkspace
+  SCHEME: Tally
+
+jobs:
+  build:
+    # macos-latest is a real Mac in GitHub's data centre with Xcode preinstalled.
+    # It exists only for this run and is destroyed afterwards.
+    # Once the pipeline is working, consider pinning this to a specific version
+    # (e.g. macos-15) so an Xcode upgrade can never break a release build.
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Show toolchain versions
+        run: |
+          xcodebuild -version
+          pod --version
+
+      # The project uses CocoaPods (Firebase/Messaging, see Podfile), so the
+      # dependencies must be fetched before anything can build. This is also
+      # why we build the .xcworkspace and NOT the .xcodeproj — building the
+      # project directly would fail with missing Firebase headers.
+      - name: Install CocoaPods dependencies
+        working-directory: ${{ env.XCODE_DIR }}
+        run: pod install --repo-update
+
+      # Sanity check. If the scheme name ever changes, this step prints the
+      # real one and the failure below becomes self-explanatory.
+      - name: List available schemes
+        working-directory: ${{ env.XCODE_DIR }}
+        run: xcodebuild -workspace "$WORKSPACE" -list
+
+      # Build for the simulator with signing switched off. A simulator build
+      # needs no certificate, no provisioning profile and no Apple account,
+      # which is exactly what makes this a clean first test: if it fails, the
+      # problem is the project, not the credentials.
+      - name: Build for iOS Simulator (no code signing)
+        working-directory: ${{ env.XCODE_DIR }}
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Confirm the app bundle was produced
+        working-directory: ${{ env.XCODE_DIR }}
+        run: |
+          echo "Built products:"
+          find build/Build/Products -maxdepth 2 -name "*.app" -print
+          test -n "$(find build/Build/Products -maxdepth 2 -name '*.app' -print -quit)" \
+            || { echo "::error::No .app bundle was produced"; exit 1; }
