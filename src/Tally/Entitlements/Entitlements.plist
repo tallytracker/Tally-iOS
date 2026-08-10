@@ -1,27 +1,34 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Tally — iOS entitlements.
+
+  TRIMMED 10 Aug 2026. PWABuilder generated this file with two problems that
+  would have failed code signing:
+
+  1. macOS App Sandbox keys in an iOS app — com.apple.security.app-sandbox,
+     .device.camera, .device.audio-input, .files.user-selected.read-write,
+     .network.client, .personal-information.location, .print. These are macOS
+     entitlements. iOS apps are sandboxed implicitly and never declare them;
+     an App Store provisioning profile does not include them, so signing fails
+     on an entitlement mismatch. All removed.
+
+  2. com.apple.developer.associated-domains pointing at applinks/webcredentials
+     for tallytracker.github.io — the host RETIRED on 28 Jul 2026. Two separate
+     problems: the host is dead, AND the App ID (io.github.tallytracker.tally)
+     has Sign in with Apple and Push Notifications enabled but NOT Associated
+     Domains, so requesting the entitlement fails signing outright. Tally does
+     not use universal links or password autofill, so it was removed rather
+     than repointed. If it is ever wanted, enable the Associated Domains
+     capability on the App ID first and use tally-app-c82c6.web.app.
+
+  WHAT REMAINS: aps-environment only. Push Notifications IS enabled on the App
+  ID, and the app uses Firebase Cloud Messaging, so this one is both correct
+  and required. "production" is right for App Store and TestFlight builds.
+-->
 <plist version="1.0">
 <dict>
 	<key>aps-environment</key>
 	<string>production</string>
-	<key>com.apple.developer.associated-domains</key>
-	<array>
-		<string>applinks:tallytracker.github.io</string>
-		<string>webcredentials:tallytracker.github.io</string>
-	</array>
-	<key>com.apple.security.app-sandbox</key>
-	<true/>
-	<key>com.apple.security.device.audio-input</key>
-	<true/>
-	<key>com.apple.security.device.camera</key>
-	<true/>
-	<key>com.apple.security.files.user-selected.read-write</key>
-	<true/>
-	<key>com.apple.security.network.client</key>
-	<true/>
-	<key>com.apple.security.personal-information.location</key>
-	<true/>
-	<key>com.apple.security.print</key>
-	<true/>
 </dict>
 </plist>

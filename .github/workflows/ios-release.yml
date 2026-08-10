@@ -1,0 +1,171 @@
+## Tally — iOS signed archive and App Store Connect upload
+##
+## PHASE 2 of the no-Mac pipeline. Produces a REAL SIGNED .ipa and can upload it
+## to App Store Connect for TestFlight or submission.
+##
+## Put this file in the Tally-iOS repo at:  .github/workflows/ios-release.yml
+##
+## MANUAL TRIGGER ONLY. This deliberately does NOT run on push — you do not want
+## an App Store upload every time a file changes. Run it from the Actions tab
+## with "Run workflow", and tick "upload" only when you actually want the build
+## to reach App Store Connect. Leaving it unticked archives and signs without
+## uploading, which is the right way to test the signing half on its own.
+##
+## REQUIRED SECRETS (Settings > Secrets and variables > Actions):
+##   APPSTORE_API_KEY_ID       — the Key ID, e.g. ABCD123456
+##   APPSTORE_API_ISSUER_ID    — the Issuer ID (long UUID, shown above the table)
+##   APPSTORE_API_PRIVATE_KEY  — the ENTIRE contents of the .p8 file,
+##                               including the BEGIN and END lines
+##
+## Secrets are write-only: they never appear in logs and are not exposed to
+## workflows triggered from forks, which is why a public repo is fine here.
+##
+## HOW SIGNING WORKS HERE — no .p12 and no provisioning profile needed. The
+## project already uses CODE_SIGN_STYLE = Automatic, so xcodebuild is given the
+## App Store Connect API key and -allowProvisioningUpdates, and it creates and
+## downloads the distribution certificate and profile itself. One credential
+## instead of three.
+
+name: iOS release (signed archive + upload)
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload:
+        description: "Upload the build to App Store Connect (leave unticked to only archive and sign)"
+        type: boolean
+        default: false
+
+env:
+  XCODE_DIR: src
+  WORKSPACE: Tally.xcworkspace
+  SCHEME: Tally
+  TEAM_ID: K3DM32S2MF
+  BUNDLE_ID: io.github.tallytracker.tally
+
+jobs:
+  release:
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Show toolchain versions
+        run: xcodebuild -version
+
+      # xcodebuild and altool both expect the key at this exact path and
+      # filename. Written from a secret, so it never touches the repo.
+      - name: Install the App Store Connect API key
+        env:
+          KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          PRIVATE_KEY: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/private_keys
+          printf '%s\n' "$PRIVATE_KEY" > ~/private_keys/AuthKey_${KEY_ID}.p8
+          echo "Key installed (contents not printed)."
+
+      - name: Install CocoaPods dependencies
+        working-directory: ${{ env.XCODE_DIR }}
+        run: pod install --repo-update
+
+      # The build number must increase with every upload or App Store Connect
+      # rejects it. github.run_number increments automatically per run, so this
+      # can never collide with a previous upload.
+      - name: Archive (signed)
+        working-directory: ${{ env.XCODE_DIR }}
+        env:
+          KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+        run: |
+          set -o pipefail
+          xcodebuild archive \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$PWD/build/Tally.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$HOME/private_keys/AuthKey_${KEY_ID}.p8" \
+            -authenticationKeyID "$KEY_ID" \
+            -authenticationKeyIssuerID "$ISSUER_ID" \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            CODE_SIGN_STYLE=Automatic \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }}
+
+      - name: Write ExportOptions.plist
+        working-directory: ${{ env.XCODE_DIR }}
+        run: |
+          cat > ExportOptions.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store-connect</string>
+            <key>teamID</key>
+            <string>${TEAM_ID}</string>
+            <key>signingStyle</key>
+            <string>automatic</string>
+            <key>uploadSymbols</key>
+            <true/>
+            <key>destination</key>
+            <string>export</string>
+          </dict>
+          </plist>
+          PLIST
+          cat ExportOptions.plist
+
+      # If this step fails complaining about the "method" value, the Xcode on
+      # the runner is older than the app-store-connect rename: change
+      # app-store-connect to app-store above and re-run.
+      - name: Export signed .ipa
+        working-directory: ${{ env.XCODE_DIR }}
+        env:
+          KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+        run: |
+          set -o pipefail
+          xcodebuild -exportArchive \
+            -archivePath "$PWD/build/Tally.xcarchive" \
+            -exportPath "$PWD/build/export" \
+            -exportOptionsPlist ExportOptions.plist \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$HOME/private_keys/AuthKey_${KEY_ID}.p8" \
+            -authenticationKeyID "$KEY_ID" \
+            -authenticationKeyIssuerID "$ISSUER_ID"
+          echo "Exported:"
+          ls -lh build/export
+
+      - name: Upload the .ipa as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Tally-ipa
+          path: ${{ env.XCODE_DIR }}/build/export/*.ipa
+          if-no-files-found: error
+          retention-days: 14
+
+      # Only runs when the "upload" box was ticked at trigger time.
+      - name: Upload to App Store Connect
+        if: ${{ inputs.upload }}
+        working-directory: ${{ env.XCODE_DIR }}
+        env:
+          KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+        run: |
+          IPA=$(find build/export -name "*.ipa" -print -quit)
+          echo "Uploading $IPA"
+          xcrun altool --upload-app \
+            -f "$IPA" \
+            -t ios \
+            --apiKey "$KEY_ID" \
+            --apiIssuer "$ISSUER_ID"
+
+      - name: Summary
+        run: |
+          echo "### iOS release run complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Build number: ${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Uploaded to App Store Connect: ${{ inputs.upload }}" >> $GITHUB_STEP_SUMMARY
+          echo "- The signed .ipa is attached to this run as an artifact." >> $GITHUB_STEP_SUMMARY
