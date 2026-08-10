@@ -74,15 +74,20 @@ jobs:
       # rejects it. github.run_number increments automatically per run, so this
       # can never collide with a previous upload.
       #
-      # CODE_SIGN_IDENTITY="Apple Distribution" IS LOAD-BEARING. The PWABuilder
-      # project sets CODE_SIGN_IDENTITY = "Apple Development" in the pbxproj.
-      # Left alone, xcodebuild asks Apple for an iOS App DEVELOPMENT profile,
-      # which requires at least one registered device — and run #1 failed with
-      # exactly that: "Your team has no devices from which to generate a
-      # provisioning profile" plus "No profiles for
-      # 'io.github.tallytracker.tally' were found ... iOS App Development".
-      # App Store DISTRIBUTION profiles need no devices, which is the whole
-      # point of building this way. Do not remove this line.
+      # SIGNING IDENTITY IS SET IN THE PROJECT FILE, NOT HERE. Two failures
+      # got us to this point:
+      #   run #1 - no identity set anywhere. The Release config had no
+      #     CODE_SIGN_IDENTITY, so Xcode used its default "Apple Development",
+      #     asked Apple for a DEVELOPMENT profile and failed: "Your team has
+      #     no devices from which to generate a provisioning profile".
+      #   run #2 - passed CODE_SIGN_IDENTITY="Apple Distribution" on the
+      #     command line. Command-line build settings apply to EVERY target,
+      #     so all nine Pods targets plus Tally failed with "conflicting
+      #     provisioning settings" - a manual identity contradicts
+      #     CODE_SIGN_STYLE = Automatic.
+      # The fix is CODE_SIGN_IDENTITY = "Apple Distribution" in the Tally
+      # target's RELEASE configuration in project.pbxproj: it scopes to the
+      # one target that needs it and leaves the Pods alone.
       - name: Archive (signed)
         working-directory: ${{ env.XCODE_DIR }}
         env:
@@ -102,7 +107,6 @@ jobs:
             -authenticationKeyIssuerID "$ISSUER_ID" \
             DEVELOPMENT_TEAM="$TEAM_ID" \
             CODE_SIGN_STYLE=Automatic \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
             CURRENT_PROJECT_VERSION=${{ github.run_number }}
 
       - name: Write ExportOptions.plist
