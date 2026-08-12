@@ -90,8 +90,13 @@ jobs:
       # no devices at all, and -allowProvisioningUpdates plus the API key lets
       # it create the certificate and profile on demand. The build number comes
       # from github.run_number so it always increases.
-      # AD-HOC SIGN THE ARCHIVE (11 Aug 2026) — DO NOT GO BACK TO
-      # CODE_SIGNING_ALLOWED=NO. That produced an archive with NO entitlements
+      # ATTEMPTED AND REJECTED (11 Aug 2026): ad-hoc signing the archive
+      # (CODE_SIGN_IDENTITY="-") to get entitlements baked in. The iOS SDK
+      # refuses it outright — "Ad Hoc code signing is not allowed with SDK
+      # 'iOS 26.5'" — for the app target and all nine Pods targets. Do not retry.
+      # The entitlements are restored by the re-sign step after export instead.
+      #
+      # ORIGINAL NOTE — WHY THE ARCHIVE IS UNSIGNED. DO NOT GO BACK TO That produced an archive with NO entitlements
       # baked in, and -exportArchive then signed it with only a minimal default
       # set. PROVEN by the entitlements dump on run #11: the shipped binary
       # carried application-identifier, beta-reports-active, team-identifier and
@@ -110,7 +115,7 @@ jobs:
       # CODE_SIGN_STYLE=Manual is required: Automatic refuses any explicit
       # identity (that was failed run #3 on 10 Aug). The empty
       # PROVISIONING_PROFILE_SPECIFIER stops it looking for one it does not need.
-      - name: Archive (ad-hoc signed — export re-signs it)
+      - name: Archive (unsigned — export signs it)
         working-directory: ${{ env.XCODE_DIR }}
         env:
           KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
@@ -128,11 +133,8 @@ jobs:
             -authenticationKeyID "$KEY_ID" \
             -authenticationKeyIssuerID "$ISSUER_ID" \
             DEVELOPMENT_TEAM="$TEAM_ID" \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="-" \
-            PROVISIONING_PROFILE_SPECIFIER="" \
-            CODE_SIGNING_ALLOWED=YES \
-            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
             CURRENT_PROJECT_VERSION=${{ github.run_number }}
 
       - name: Write ExportOptions.plist
@@ -178,6 +180,48 @@ jobs:
             -authenticationKeyIssuerID "$ISSUER_ID"
           echo "Exported:"
           ls -lh build/export
+
+      # RESTORE THE ENTITLEMENTS (11 Aug 2026). The archive is unsigned, so
+      # -exportArchive signs the app with a MINIMAL default set and silently
+      # drops everything in Entitlements.plist. Run #11 proved it: the shipped
+      # binary carried no com.apple.developer.applesignin and no
+      # aps-environment, which is why Sign in with Apple failed with
+      # ASAuthorizationError 1000 and why iOS push could never have worked.
+      #
+      # Ad-hoc signing the archive would have been the tidy fix but the iOS SDK
+      # forbids it, so instead the exported app is re-signed here with the real
+      # distribution identity AND the real entitlements file. The identity is
+      # already in the keychain at this point: cloud signing put it there during
+      # export.
+      #
+      # --generate-entitlement-der is required on modern iOS: the store rejects
+      # binaries whose DER entitlements are missing or stale.
+      - name: Re-sign the app with its real entitlements
+        working-directory: ${{ env.XCODE_DIR }}
+        run: |
+          set -euo pipefail
+          SRC="$PWD"
+          IPA="$SRC/$(cd "$SRC" && find build/export -name '*.ipa' -print -quit)"
+          echo "IPA: $IPA"
+          WORK=/tmp/resign
+          rm -rf "$WORK" && mkdir -p "$WORK"
+          unzip -q "$IPA" -d "$WORK"
+          APP=$(find "$WORK/Payload" -maxdepth 1 -name '*.app' -print -quit)
+          IDENTITY=$(security find-identity -v -p codesigning \
+            | grep -o '"Apple Distribution[^"]*"' | head -1 | tr -d '"')
+          if [ -z "$IDENTITY" ]; then
+            echo "No Apple Distribution identity in the keychain — cannot re-sign."
+            security find-identity -v -p codesigning
+            exit 1
+          fi
+          echo "Re-signing with: $IDENTITY"
+          codesign --force --sign "$IDENTITY" \
+            --entitlements "$SRC/Tally/Entitlements/Entitlements.plist" \
+            --generate-entitlement-der \
+            "$APP"
+          rm -f "$IPA"
+          (cd "$WORK" && zip -qry "$IPA" Payload)
+          echo "Re-signed and repacked."
 
       # DIAGNOSTIC (11 Aug 2026) — prove what entitlements the SIGNED binary
       # actually carries. The archive is built with CODE_SIGNING_ALLOWED=NO and
