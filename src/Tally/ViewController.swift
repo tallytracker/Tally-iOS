@@ -365,11 +365,25 @@ extension ViewController: ASAuthorizationControllerDelegate, ASAuthorizationCont
                                  didCompleteWithError error: Error) {
         // A cancel is a normal outcome, not a failure — the web app maps it to
         // auth/popup-closed-by-user and stays quiet rather than showing an error.
+        //
+        // Everything else reports Apple's ACTUAL error code, because "failed"
+        // alone is undiagnosable and there is no way to read a device console
+        // without a Mac. ASAuthorizationError codes: 1000 unknown, 1001
+        // canceled, 1002 invalidResponse, 1003 notHandled, 1004 failed, 1005
+        // notInteractive. 1000 and 1004 usually mean the entitlement or the App
+        // ID's Sign in with Apple configuration is wrong rather than anything
+        // in this code.
         var reason = "failed"
-        if let authError = error as? ASAuthorizationError, authError.code == .canceled {
-            reason = "cancelled"
+        if let authError = error as? ASAuthorizationError {
+            if authError.code == .canceled {
+                reason = "cancelled"
+            } else {
+                reason = "asauth-\(authError.code.rawValue)"
+            }
+        } else {
+            reason = "nserr-\((error as NSError).code)"
         }
-        sendAppleSignInResult(["error": reason])
+        sendAppleSignInResult(["error": reason, "detail": error.localizedDescription])
     }
 }
 
