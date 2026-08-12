@@ -156,6 +156,30 @@ jobs:
           echo "Exported:"
           ls -lh build/export
 
+      # DIAGNOSTIC (11 Aug 2026) — prove what entitlements the SIGNED binary
+      # actually carries. The archive is built with CODE_SIGNING_ALLOWED=NO and
+      # signed later at export, so there is a real question over whether
+      # Entitlements.plist survives that route. Sign in with Apple failing at
+      # runtime with ASAuthorizationError 1000 ("unknown") is exactly what a
+      # missing com.apple.developer.applesignin entitlement looks like, and
+      # aps-environment has never been verified on iOS either. Cheap to keep.
+      - name: Show the signed app's entitlements
+        working-directory: ${{ env.XCODE_DIR }}
+        run: |
+          set +e
+          IPA=$(find build/export -name "*.ipa" -print -quit)
+          echo "IPA: $IPA"
+          rm -rf /tmp/entcheck && mkdir -p /tmp/entcheck
+          unzip -q "$IPA" -d /tmp/entcheck
+          APP=$(find /tmp/entcheck/Payload -maxdepth 1 -name "*.app" -print -quit)
+          echo "APP: $APP"
+          echo "===== ENTITLEMENTS EMBEDDED IN THE SIGNED BINARY ====="
+          codesign -d --entitlements :- "$APP" 2>&1
+          echo "===== PROFILE ENTITLEMENTS ====="
+          security cms -D -i "$APP/embedded.mobileprovision" 2>/dev/null \
+            | plutil -extract Entitlements xml1 -o - - 2>&1
+          echo "====================================================="
+
       - name: Upload the .ipa as a build artifact
         uses: actions/upload-artifact@v4
         with:
