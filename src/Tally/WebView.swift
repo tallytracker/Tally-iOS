@@ -103,12 +103,81 @@ func calcWebviewFrame(webviewView: UIView, toolbarView: UIToolbar?) -> CGRect{
 }
 
 extension ViewController: WKUIDelegate, WKDownloadDelegate {
-    // redirect new tabs to main webview
+    // POPUP (window.open) SUPPORT — added 12 Aug 2026.
+    //
+    // PWABuilder ships this method returning nil and loading the request in the
+    // MAIN webview instead. That breaks every popup-based OAuth flow, because
+    // returning nil makes window.open() evaluate to null in JavaScript. Sign in
+    // with Apple's JS SDK (AppleID.auth.signIn with usePopup:true) and
+    // Firebase's signInWithPopup both need that window handle to receive their
+    // result from; with no handle the promise never settles. The old behaviour
+    // made it worse by navigating the main frame away to the provider, which
+    // tore down the very page that was waiting, along with the one-time nonce
+    // held in its memory — so no fallback could recover it either.
+    //
+    // Observed on TestFlight build 6: Apple's sheet appears, you authorise, get
+    // dropped on Firebase's /__/auth/handler page showing its manual "Continue
+    // to the app" button, tap it, and the app is still signed out. Google
+    // sign-in was unaffected because it consults _preferRedirectAuth() and takes
+    // the full-page redirect path instead; Apple's SDK is hardcoded to popup.
+    //
+    // The child webview MUST be constructed from the `configuration` passed in,
+    // not a fresh one. That object carries the opener relationship the
+    // postMessage handshake depends on, and it carries
+    // limitsNavigationsToAppBoundDomains, which keeps the popup inside
+    // WKAppBoundDomains (appleid.apple.com and accounts.google.com are both
+    // listed in Info.plist).
+    //
+    // navigationDelegate is deliberately left unset. The main one's
+    // decidePolicyFor is written around the app's own origin and diverts
+    // anything else to SFSafariViewController, which would kick the provider's
+    // own sub-navigations out of the popup and break the flow again.
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        if (navigationAction.targetFrame == nil) {
-            webView.load(navigationAction.request)
-        }
-        return nil
+        let popup = WKWebView(frame: .zero, configuration: configuration)
+        popup.customUserAgent = webView.customUserAgent
+        popup.uiDelegate = self
+        popup.translatesAutoresizingMaskIntoConstraints = false
+
+        let host = UIViewController()
+        host.view.backgroundColor = .systemBackground
+        host.view.addSubview(popup)
+
+        // Apple and Firebase both call window.close() when the flow finishes,
+        // which lands in webViewDidClose below. This button is the escape hatch
+        // for a user who backs out halfway and would otherwise be stuck in a
+        // chrome-less webview with no way back.
+        let cancel = UIButton(type: .system)
+        cancel.setTitle("Cancel", for: .normal)
+        cancel.translatesAutoresizingMaskIntoConstraints = false
+        cancel.addTarget(self, action: #selector(dismissAuthPopup), for: .touchUpInside)
+        host.view.addSubview(cancel)
+
+        NSLayoutConstraint.activate([
+            cancel.topAnchor.constraint(equalTo: host.view.safeAreaLayoutGuide.topAnchor, constant: 8),
+            cancel.leadingAnchor.constraint(equalTo: host.view.leadingAnchor, constant: 16),
+            popup.topAnchor.constraint(equalTo: cancel.bottomAnchor, constant: 8),
+            popup.leadingAnchor.constraint(equalTo: host.view.leadingAnchor),
+            popup.trailingAnchor.constraint(equalTo: host.view.trailingAnchor),
+            popup.bottomAnchor.constraint(equalTo: host.view.bottomAnchor)
+        ])
+
+        authPopupWebView = popup
+        authPopupController = host
+        host.modalPresentationStyle = .formSheet
+        present(host, animated: true)
+        return popup
+    }
+
+    // WebKit calls this when the popup runs window.close() — the normal end of
+    // a successful sign-in.
+    func webViewDidClose(_ webView: WKWebView) {
+        if webView === authPopupWebView { dismissAuthPopup() }
+    }
+
+    @objc func dismissAuthPopup() {
+        authPopupController?.dismiss(animated: true)
+        authPopupWebView = nil
+        authPopupController = nil
     }
     // restrict navigation to target host, open external links in 3rd party apps
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {

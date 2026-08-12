@@ -10,6 +10,12 @@ class ViewController: UIViewController, WKNavigationDelegate, UIDocumentInteract
     }
 
     var documentController: UIDocumentInteractionController?
+
+    // Live references to the OAuth popup while it is on screen, so
+    // webViewDidClose can dismiss the right one. See createWebViewWith in
+    // WebView.swift for why popups have to be supported at all.
+    var authPopupWebView: WKWebView?
+    var authPopupController: UIViewController?
     func documentInteractionControllerViewControllerForPreview(_ controller: UIDocumentInteractionController) -> UIViewController {
         return self
     }
