@@ -17,6 +17,11 @@ class ViewController: UIViewController, WKNavigationDelegate, UIDocumentInteract
     // WebView.swift for why popups have to be supported at all.
     var authPopupWebView: WKWebView?
     var authPopupController: UIViewController?
+
+    // Strong reference to the in-flight Sign in with Apple request. See
+    // handleAppleSignIn for why this must exist. Typed as Any? so the property
+    // needs no @available annotation; cast at the point of use.
+    var appleAuthController: Any?
     func documentInteractionControllerViewControllerForPreview(_ controller: UIDocumentInteractionController) -> UIViewController {
         return self
     }
@@ -329,15 +334,32 @@ extension ViewController: ASAuthorizationControllerDelegate, ASAuthorizationCont
         let controller = ASAuthorizationController(authorizationRequests: [request])
         controller.delegate = self
         controller.presentationContextProvider = self
-        controller.performRequests()
+        // HOLD A STRONG REFERENCE. delegate and presentationContextProvider are
+        // both weak, and the controller itself is only a local here — if ARC
+        // releases it before Apple calls back, the request dies instantly and
+        // surfaces as a generic failure with no explanation, which is exactly
+        // the symptom seen on build 8. Cleared in both delegate callbacks.
+        appleAuthController = controller
+        // Apple requires this on the main thread. The WKScriptMessageHandler
+        // callback normally is already, but asserting it costs nothing and a
+        // background call fails silently.
+        DispatchQueue.main.async { controller.performRequests() }
     }
 
     func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
-        return self.view.window ?? ASPresentationAnchor()
+        // A detached, never-shown ASPresentationAnchor() is a bad fallback:
+        // Apple cannot present its sheet on it and fails the request. Prefer the
+        // real key window, then any window in the scene, and only then give up.
+        if let w = self.view.window { return w }
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        if let key = scenes.flatMap({ $0.windows }).first(where: { $0.isKeyWindow }) { return key }
+        if let any = scenes.flatMap({ $0.windows }).first { return any }
+        return ASPresentationAnchor()
     }
 
     func authorizationController(controller: ASAuthorizationController,
                                  didCompleteWithAuthorization authorization: ASAuthorization) {
+        appleAuthController = nil
         guard let cred = authorization.credential as? ASAuthorizationAppleIDCredential,
               let tokenData = cred.identityToken,
               let idToken = String(data: tokenData, encoding: .utf8) else {
@@ -373,6 +395,7 @@ extension ViewController: ASAuthorizationControllerDelegate, ASAuthorizationCont
         // notInteractive. 1000 and 1004 usually mean the entitlement or the App
         // ID's Sign in with Apple configuration is wrong rather than anything
         // in this code.
+        appleAuthController = nil
         var reason = "failed"
         if let authError = error as? ASAuthorizationError {
             if authError.code == .canceled {
