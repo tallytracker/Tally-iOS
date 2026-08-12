@@ -1,5 +1,6 @@
 import UIKit
 import WebKit
+import AuthenticationServices
 
 var webView: WKWebView! = nil
 
@@ -278,5 +279,114 @@ extension ViewController: WKScriptMessageHandler {
         if message.name == "push-token" {
             handleFCMToken()
         }
+        if message.name == "apple-signin" {
+            if #available(iOS 13.0, *) { handleAppleSignIn(message: message) }
+            else { sendAppleSignInResult(["error": "unsupported"]) }
+        }
   }
+}
+// ===== NATIVE SIGN IN WITH APPLE (added 11 Aug 2026) =====
+//
+// WHY THIS EXISTS. The web app can sign in with Apple on its own, via Apple's
+// JS SDK at appleid.apple.com. That works in Safari but is close to unusable
+// inside the wrapper: a WKWebView cannot reach the device keychain, so Apple
+// shows its full web login and asks for the Apple ID PASSWORD, and its "sign in
+// with passkey" button does nothing there. Face ID has made that password
+// something almost nobody remembers, so Apple sign-in was present but
+// effectively a dead end. This bridge runs the REAL native sheet instead:
+// Face ID, name and email already filled in, no password.
+//
+// Guideline 4.8 does NOT require the native sheet — the web flow passes review.
+// This is a conversion fix, not a compliance one.
+//
+// HOW IT FITS TOGETHER. The web app owns the nonce, because Firebase needs the
+// raw value to verify the token it gets back:
+//   1. JS generates a random rawNonce, SHA-256 hashes it, and posts the HASH
+//      here through the 'apple-signin' message handler.
+//   2. Swift asks Apple to sign in, passing that hash as request.nonce.
+//   3. Apple returns an identity token with the hash embedded.
+//   4. Swift hands the token and authorization code back as an
+//      'apple-signin-result' event, base64-encoded.
+//   5. JS builds the Firebase credential from {idToken, rawNonce} and signs in,
+//      then exchanges the code for a refresh token so account deletion can
+//      still revoke it (Guideline 5.1.1(v)).
+//
+// The authorization code is the reason this cannot just use Firebase's own
+// Apple provider: that flow does not surface the code, and without it there is
+// nothing to revoke on deletion.
+@available(iOS 13.0, *)
+extension ViewController: ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding {
+
+    func handleAppleSignIn(message: WKScriptMessage) {
+        guard let body = message.body as? [String: Any],
+              let hashedNonce = body["nonce"] as? String, !hashedNonce.isEmpty else {
+            sendAppleSignInResult(["error": "bad-request"])
+            return
+        }
+        let request = ASAuthorizationAppleIDProvider().createRequest()
+        request.requestedScopes = [.fullName, .email]
+        request.nonce = hashedNonce
+        let controller = ASAuthorizationController(authorizationRequests: [request])
+        controller.delegate = self
+        controller.presentationContextProvider = self
+        controller.performRequests()
+    }
+
+    func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
+        return self.view.window ?? ASPresentationAnchor()
+    }
+
+    func authorizationController(controller: ASAuthorizationController,
+                                 didCompleteWithAuthorization authorization: ASAuthorization) {
+        guard let cred = authorization.credential as? ASAuthorizationAppleIDCredential,
+              let tokenData = cred.identityToken,
+              let idToken = String(data: tokenData, encoding: .utf8) else {
+            sendAppleSignInResult(["error": "no-identity-token"])
+            return
+        }
+        var payload: [String: Any] = ["idToken": idToken]
+        if let codeData = cred.authorizationCode,
+           let code = String(data: codeData, encoding: .utf8) {
+            payload["code"] = code
+        }
+        // Apple sends the name and email ONLY on the very first authorisation
+        // for this app. Every later sign-in returns nil for both, which is why
+        // the web app must not depend on them being present.
+        if let given = cred.fullName?.givenName, !given.isEmpty {
+            payload["givenName"] = given
+        }
+        if let email = cred.email, !email.isEmpty {
+            payload["email"] = email
+        }
+        sendAppleSignInResult(payload)
+    }
+
+    func authorizationController(controller: ASAuthorizationController,
+                                 didCompleteWithError error: Error) {
+        // A cancel is a normal outcome, not a failure — the web app maps it to
+        // auth/popup-closed-by-user and stays quiet rather than showing an error.
+        var reason = "failed"
+        if let authError = error as? ASAuthorizationError, authError.code == .canceled {
+            reason = "cancelled"
+        }
+        sendAppleSignInResult(["error": reason])
+    }
+}
+
+extension ViewController {
+    // Base64 rather than raw JSON: identity tokens are long, and names and email
+    // addresses can contain characters that would need escaping inside a
+    // JavaScript string literal. Encoding sidesteps the whole quoting problem.
+    func sendAppleSignInResult(_ payload: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
+              let json = String(data: data, encoding: .utf8) else {
+            return
+        }
+        let encoded = Data(json.utf8).base64EncodedString()
+        DispatchQueue.main.async {
+            Tally.webView.evaluateJavaScript(
+                "window.dispatchEvent(new CustomEvent('apple-signin-result',{detail:'\(encoded)'}))"
+            )
+        }
+    }
 }

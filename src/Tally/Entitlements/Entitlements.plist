@@ -25,10 +25,30 @@
   WHAT REMAINS: aps-environment only. Push Notifications IS enabled on the App
   ID, and the app uses Firebase Cloud Messaging, so this one is both correct
   and required. "production" is right for App Store and TestFlight builds.
+
+  ADDED 11 Aug 2026 — com.apple.developer.applesignin. Required for the NATIVE
+  Sign in with Apple sheet (Face ID, no password). Without it,
+  ASAuthorizationController fails at runtime with error 1000.
+
+  This one is safe to request, unlike the associated-domains entitlement
+  removed above: Sign in with Apple IS already enabled on the App ID
+  (io.github.tallytracker.tally), as the note above records, so the App Store
+  provisioning profile includes it and signing succeeds.
+
+  WHY IT WAS NEEDED: the web fallback (appleid.apple.com inside the webview)
+  cannot reach the device keychain, so it demands the Apple ID password and its
+  passkey button does nothing in a WKWebView. Almost nobody remembers that
+  password now that Face ID exists, which made Apple sign-in present but
+  effectively unusable. Guideline 4.8 does not require the native sheet, so
+  this is a conversion fix rather than a compliance one.
 -->
 <plist version="1.0">
 <dict>
 	<key>aps-environment</key>
 	<string>production</string>
+	<key>com.apple.developer.applesignin</key>
+	<array>
+		<string>Default</string>
+	</array>
 </dict>
 </plist>
