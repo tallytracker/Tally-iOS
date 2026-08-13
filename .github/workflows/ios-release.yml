@@ -96,7 +96,8 @@ jobs:
       # 'iOS 26.5'" — for the app target and all nine Pods targets. Do not retry.
       # The entitlements are restored by the re-sign step after export instead.
       #
-      # ORIGINAL NOTE — WHY THE ARCHIVE IS UNSIGNED. DO NOT GO BACK TO That produced an archive with NO entitlements
+      # ORIGINAL NOTE — WHY THE ARCHIVE IS UNSIGNED. Archiving with
+      # CODE_SIGNING_ALLOWED=NO produced an archive with NO entitlements
       # baked in, and -exportArchive then signed it with only a minimal default
       # set. PROVEN by the entitlements dump on run #11: the shipped binary
       # carried application-identifier, beta-reports-active, team-identifier and
@@ -196,32 +197,113 @@ jobs:
       #
       # --generate-entitlement-der is required on modern iOS: the store rejects
       # binaries whose DER entitlements are missing or stale.
+      #
+      # WHY THIS STEP IS WRITTEN THE WAY IT IS (13 Aug 2026). Run #13 failed
+      # after ONE SECOND having printed nothing but the IPA path, which told us
+      # almost nothing. Cause: the step ran under `set -euo pipefail`, and
+      #     IDENTITY=$(security find-identity ... | grep -o ...)
+      # aborts the whole step the moment grep matches nothing — BEFORE reaching
+      # the `if [ -z "$IDENTITY" ]` guard that was supposed to report exactly
+      # that. `set -e` and a guard clause are mutually exclusive; the guard
+      # never runs. So: `-e` is deliberately OFF here and every stage checks
+      # itself and says what it found. RULE FOR THIS STEP — never reintroduce
+      # `set -e`; a diagnostic step that dies silently is worse than no step.
+      #
+      # The keychain dump is printed FIRST, unconditionally, before anything can
+      # fail. Whether cloud signing actually leaves a usable identity behind is
+      # the open question this step exists to answer, so that evidence must
+      # survive any later failure.
       - name: Re-sign the app with its real entitlements
         working-directory: ${{ env.XCODE_DIR }}
         run: |
-          set -euo pipefail
+          set -uo pipefail   # NOT -e. See the note above; the guards need to run.
           SRC="$PWD"
-          IPA="$SRC/$(cd "$SRC" && find build/export -name '*.ipa' -print -quit)"
+
+          echo "===== KEYCHAIN SEARCH LIST ====="
+          security list-keychains -d user 2>&1 || true
+          echo "===== VALID CODESIGNING IDENTITIES ====="
+          security find-identity -v -p codesigning 2>&1 || true
+          echo "===== ALL CODESIGNING IDENTITIES (incl. invalid) ====="
+          security find-identity -p codesigning 2>&1 || true
+          echo "========================================================"
+
+          IPA=$(find "$SRC/build/export" -name '*.ipa' -print -quit)
+          if [ -z "${IPA:-}" ]; then
+            echo "FATAL: no .ipa under build/export."
+            ls -lR "$SRC/build/export" 2>&1 | head -50
+            exit 1
+          fi
           echo "IPA: $IPA"
+
+          ENTS="$SRC/Tally/Entitlements/Entitlements.plist"
+          if [ ! -f "$ENTS" ]; then
+            echo "Entitlements.plist not at the expected path — searching."
+            ENTS=$(find "$SRC" -name 'Entitlements.plist' -not -path '*/Pods/*' -print -quit)
+          fi
+          if [ -z "${ENTS:-}" ] || [ ! -f "$ENTS" ]; then
+            echo "FATAL: could not locate Entitlements.plist."
+            find "$SRC" \( -name '*.entitlements' -o -name 'Entitlements.plist' \) 2>&1 | head -20
+            exit 1
+          fi
+          echo "Entitlements file: $ENTS"
+          echo "----- contents being applied -----"
+          cat "$ENTS"
+          echo "----------------------------------"
+
           WORK=/tmp/resign
-          rm -rf "$WORK" && mkdir -p "$WORK"
-          unzip -q "$IPA" -d "$WORK"
+          rm -rf "$WORK"; mkdir -p "$WORK"
+          if ! unzip -q "$IPA" -d "$WORK"; then
+            echo "FATAL: could not unzip the .ipa."
+            exit 1
+          fi
           APP=$(find "$WORK/Payload" -maxdepth 1 -name '*.app' -print -quit)
-          IDENTITY=$(security find-identity -v -p codesigning \
+          if [ -z "${APP:-}" ]; then
+            echo "FATAL: no .app inside Payload."
+            ls -lR "$WORK" 2>&1 | head -50
+            exit 1
+          fi
+          echo "APP: $APP"
+
+          # Three ways to name the identity, cheapest first. The last one uses
+          # the SHA-1 hash, which works even when the certificate's common name
+          # is not one we anticipated.
+          IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
             | grep -o '"Apple Distribution[^"]*"' | head -1 | tr -d '"')
-          if [ -z "$IDENTITY" ]; then
-            echo "No Apple Distribution identity in the keychain — cannot re-sign."
-            security find-identity -v -p codesigning
+          if [ -z "${IDENTITY:-}" ]; then
+            IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
+              | grep -o '"iPhone Distribution[^"]*"' | head -1 | tr -d '"')
+          fi
+          if [ -z "${IDENTITY:-}" ]; then
+            IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
+              | awk '/^[[:space:]]*[0-9]+\)/ {print $2; exit}')
+            [ -n "${IDENTITY:-}" ] && echo "No distribution name matched; using identity hash $IDENTITY"
+          fi
+          if [ -z "${IDENTITY:-}" ]; then
+            echo "FATAL: no codesigning identity in any keychain — cloud signing"
+            echo "did not leave one behind, so re-signing here is impossible."
+            echo "Fall back to registering a device and signing at archive time."
             exit 1
           fi
           echo "Re-signing with: $IDENTITY"
-          codesign --force --sign "$IDENTITY" \
-            --entitlements "$SRC/Tally/Entitlements/Entitlements.plist" \
-            --generate-entitlement-der \
-            "$APP"
+
+          if ! codesign --force --sign "$IDENTITY" \
+                 --entitlements "$ENTS" \
+                 --generate-entitlement-der \
+                 "$APP"; then
+            echo "FATAL: codesign failed."
+            exit 1
+          fi
+
+          echo "===== ENTITLEMENTS ON THE FRESHLY RE-SIGNED .app ====="
+          codesign -d --entitlements :- "$APP" 2>&1
+          echo "======================================================"
+
           rm -f "$IPA"
-          (cd "$WORK" && zip -qry "$IPA" Payload)
-          echo "Re-signed and repacked."
+          if ! (cd "$WORK" && zip -qry "$IPA" Payload); then
+            echo "FATAL: could not repack the .ipa."
+            exit 1
+          fi
+          echo "Re-signed and repacked: $IPA"
 
       # DIAGNOSTIC (11 Aug 2026) — prove what entitlements the SIGNED binary
       # actually carries. The archive is built with CODE_SIGNING_ALLOWED=NO and
