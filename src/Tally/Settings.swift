@@ -23,7 +23,17 @@ let allowedOrigins: [String] = ["tally-app-c82c6.web.app"]
 // appleid.cdn-apple.com serves Apple's Sign in with Apple JS SDK — without it
 // the script cannot load inside the webview and Apple sign-in silently falls
 // back to the no-revocation path.
-let authOrigins: [String] = ["tally-app-c82c6.firebaseapp.com", "accounts.google.com", "appleid.apple.com", "appleid.cdn-apple.com"] // Firebase auth helper + Google OAuth + Sign in with Apple
+// accounts.youtube.com ADDED 14 Aug 2026 — DO NOT REMOVE IT.
+// Google finishes a sign-in by bouncing through other Google properties to
+// propagate the login cookie, and accounts.youtube.com is one of those hops.
+// It was missing here, so the webview CANCELLED that redirect and reopened the
+// URL in a bare SFSafariViewController with none of the cookies or state from
+// the flow it was halfway through. Google answered "400. That's an error. The
+// server cannot process the request because it is malformed." Google only takes
+// that hop when it needs to sync YouTube cookies, which is why Google sign-in
+// worked in the app for weeks and then suddenly did not — the bug was always
+// here, the route was not. Anything else in that chain belongs here too.
+let authOrigins: [String] = ["tally-app-c82c6.firebaseapp.com", "accounts.google.com", "accounts.youtube.com", "appleid.apple.com", "appleid.cdn-apple.com"] // Firebase auth helper + Google OAuth (+ its YouTube cookie hop) + Sign in with Apple
 // allowedOrigins + authOrigins <= 10
 
 let platformCookie = Cookie(name: "app-platform", value: "iOS App Store")
