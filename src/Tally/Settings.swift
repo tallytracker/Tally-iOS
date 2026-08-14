@@ -33,7 +33,18 @@ let allowedOrigins: [String] = ["tally-app-c82c6.web.app"]
 // that hop when it needs to sync YouTube cookies, which is why Google sign-in
 // worked in the app for weeks and then suddenly did not — the bug was always
 // here, the route was not. Anything else in that chain belongs here too.
-let authOrigins: [String] = ["tally-app-c82c6.firebaseapp.com", "accounts.google.com", "accounts.youtube.com", "appleid.apple.com", "appleid.cdn-apple.com"] // Firebase auth helper + Google OAuth (+ its YouTube cookie hop) + Sign in with Apple
+// BROADENED TO WHOLE DOMAINS, 14 Aug 2026 — AND THIS IS DELIBERATE.
+// Listing individual Google hostnames is a losing game. Google finishes a
+// sign-in by bouncing through a CHAIN of its own properties to propagate the
+// login cookie, and which hops it takes depends on session state. Naming
+// accounts.google.com got us to the next hop; naming accounts.youtube.com got
+// us past that one and into another. decidePolicyFor matches with
+// requestHost.range(of:), a SUBSTRING test, so "google.com" covers every
+// *.google.com and "youtube.com" every *.youtube.com in one entry each.
+// The same domains are in WKAppBoundDomains in Info.plist, which is a HARDER
+// gate: limitsNavigationsToAppBoundDomains is true, so WebKit refuses any
+// navigation outside that list before this method is even consulted.
+let authOrigins: [String] = ["tally-app-c82c6.firebaseapp.com", "google.com", "youtube.com", "appleid.apple.com", "appleid.cdn-apple.com"] // Firebase auth helper + all of Google's sign-in chain + Sign in with Apple
 // allowedOrigins + authOrigins <= 10
 
 let platformCookie = Cookie(name: "app-platform", value: "iOS App Store")

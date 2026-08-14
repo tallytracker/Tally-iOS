@@ -182,6 +182,43 @@ extension ViewController: WKUIDelegate, WKDownloadDelegate {
         authPopupWebView = nil
         authPopupController = nil
     }
+    // MAKE A BLOCKED NAVIGATION SAY SO, ON SCREEN (14 Aug 2026).
+    //
+    // Two builds were spent guessing which Google domain the sign-in chain needed
+    // next, because a refused navigation is completely silent on a device with no
+    // console. limitsNavigationsToAppBoundDomains is true, so WebKit rejects
+    // anything outside WKAppBoundDomains BEFORE decidePolicyFor is consulted —
+    // there is no other place to catch it.
+    //
+    // Now any failed navigation surfaces the HOST and the error in the app's own
+    // toast. If Google sign-in breaks again on some hop nobody anticipated, the
+    // next report will name it instead of describing a blank screen. Same lesson
+    // as the Apple diagnostic in v72: on a device-only code path, put the real
+    // error on screen or it cannot be diagnosed at all.
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        reportNavigationFailure(webView, error)
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        reportNavigationFailure(webView, error)
+    }
+
+    private func reportNavigationFailure(_ webView: WKWebView, _ error: Error) {
+        let ns = error as NSError
+        // -999 is "cancelled", which happens routinely whenever a new navigation
+        // supersedes one already in flight. Reporting it would cry wolf.
+        if ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled { return }
+        let failedUrl = (ns.userInfo[NSURLErrorFailingURLStringErrorKey] as? String) ?? "unknown URL"
+        let host = URL(string: failedUrl)?.host ?? failedUrl
+        let msg = "Blocked: \(host) — \(ns.localizedDescription)"
+        let escaped = msg
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
+        // Always report into the MAIN webview: the popup may be the thing that
+        // died, and a toast inside a dead popup helps nobody.
+        Tally.webView.evaluateJavaScript("if(typeof showToast===\'function\')showToast(\'\(escaped)\', 9000)")
+    }
+
     // restrict navigation to target host, open external links in 3rd party apps
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         if (navigationAction.request.url?.scheme == "about") {
