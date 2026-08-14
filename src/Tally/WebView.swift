@@ -17,6 +17,7 @@ func createWebView(container: UIView, WKSMH: WKScriptMessageHandler, WKND: WKNav
     // Native Sign in with Apple (11 Aug 2026). The web app posts a hashed nonce
     // here and gets the identity token back as an 'apple-signin-result' event.
     userContentController.add(WKSMH, name: "apple-signin")
+    userContentController.add(WKSMH, name: "google-signin")
 
     config.userContentController = userContentController
 

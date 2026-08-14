@@ -34,7 +34,25 @@
 			<key>CFBundleURLSchemes</key>
 			<array />
 		</dict>
+		<!-- GOOGLE SIGN-IN CALLBACK (14 Aug 2026). Google's SDK returns to the app
+		     through this scheme, which is the REVERSED_CLIENT_ID from
+		     GoogleService-Info.plist. Without it the user authenticates and the
+		     result never comes home. -->
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>google-signin</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.1024834850773-lusk0d0nom1dj0smj0n3oku0p4unik7p</string>
+			</array>
+		</dict>
 	</array>
+	<!-- The iOS OAuth client for this Firebase project. GIDSignIn reads it from
+	     here, so no Firebase iOS SDK initialisation is needed just to sign in. -->
+	<key>GIDClientID</key>
+	<string>1024834850773-lusk0d0nom1dj0smj0n3oku0p4unik7p.apps.googleusercontent.com</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>

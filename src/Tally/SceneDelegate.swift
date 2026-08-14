@@ -1,4 +1,5 @@
 import UIKit
+import GoogleSignIn
 
 @available(iOS 13.0, *)
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {
@@ -41,6 +42,13 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     
     // This function is called when our app is already running and the user clicks a custom scheme URL
     func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
+        // GOOGLE SIGN-IN COMES BACK THROUGH HERE (14 Aug 2026) and must be claimed
+        // FIRST. Everything below rewrites an incoming custom-scheme URL to https
+        // and navigates the web view to it — do that to Google's callback and the
+        // sign-in is thrown away and the app jumps somewhere meaningless.
+        if let url = URLContexts.first?.url, GIDSignIn.sharedInstance.handle(url) {
+            return
+        }
         if let scheme = URLContexts.first?.url {
             // Convert scheme://url to a https://url and navigate to it
             var comps = URLComponents(url: scheme, resolvingAgainstBaseURL: false)
