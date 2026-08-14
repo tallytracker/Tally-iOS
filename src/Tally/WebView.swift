@@ -195,15 +195,11 @@ extension ViewController: WKUIDelegate, WKDownloadDelegate {
     // next report will name it instead of describing a blank screen. Same lesson
     // as the Apple diagnostic in v72: on a device-only code path, put the real
     // error on screen or it cannot be diagnosed at all.
-    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        reportNavigationFailure(webView, error)
-    }
-
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         reportNavigationFailure(webView, error)
     }
 
-    private func reportNavigationFailure(_ webView: WKWebView, _ error: Error) {
+    func reportNavigationFailure(_ webView: WKWebView, _ error: Error) {
         let ns = error as NSError
         // -999 is "cancelled", which happens routinely whenever a new navigation
         // supersedes one already in flight. Reporting it would cry wolf.

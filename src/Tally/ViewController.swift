@@ -176,11 +176,26 @@ class ViewController: UIViewController, WKNavigationDelegate, UIDocumentInteract
     }
     
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        htmlIsLoaded = false;
-        
         if (error as NSError)._code == (-999) { return }
         if (error as NSError)._code == 102 { return }
-        
+
+        // SAY WHAT FAILED (14 Aug 2026). Blocked navigations were completely
+        // silent on device, which cost two builds guessing which Google domain
+        // the sign-in chain wanted next. See reportNavigationFailure.
+        reportNavigationFailure(webView, error)
+
+        // DO NOT TEAR THE APP DOWN WHEN IT IS THE AUTH POPUP THAT FAILED
+        // (14 Aug 2026). Everything below treats a failure as "the main page
+        // could not load": it hides the web view, shows the connection-problem
+        // screen and reloads. Applied to the sign-in popup that is exactly wrong
+        // — it throws away the half-finished OAuth flow and drops the user back
+        // on the welcome screen with no explanation, which is precisely what
+        // Google sign-in did on build 17. Only the MAIN web view gets the
+        // recovery treatment.
+        if webView !== Tally.webView { return }
+
+        htmlIsLoaded = false;
+
         self.overrideUIStyle(toDefault: true);
         webView.isHidden = true;
         loadingView.isHidden = false;
