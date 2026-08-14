@@ -8,6 +8,14 @@ target 'Tally' do
   # Add the pod for Firebase Cloud Messaging
   pod 'Firebase/Messaging'
 
+  # GOOGLE SIGN-IN (14 Aug 2026). Google refuses OAuth from embedded web
+  # views — WKWebView is named in its policy, enforced since 30 Sept 2021 —
+  # so the sign-in has to happen natively and the token be handed to the
+  # Firebase JS SDK. Same shape as the Apple bridge already in
+  # ViewController.swift. See '1. App status and instructions/
+  # Sign-in architecture - the documented way.md'.
+  pod 'GoogleSignIn'
+
 end
 
 post_install do |installer|
