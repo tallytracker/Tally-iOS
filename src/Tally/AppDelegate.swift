@@ -11,8 +11,14 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication,
                        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
 
-// TODO: if we're using Firebase, uncomment next string
-        //FirebaseApp.configure()
+// ENABLED 17 Aug 2026. PWABuilder ships this line commented out with the
+        // TODO below, and nobody ever uncommented it — FirebaseApp.configure()
+        // was called NOWHERE in this project. Without it Firebase never starts
+        // natively, so Messaging.messaging() can never mint an FCM token and
+        // push could not work on iPhone no matter what the web app did. The
+        // rest of the push bridge (PushNotifications.swift, the message
+        // handlers in WebView.swift) was already complete and unused.
+        FirebaseApp.configure()
 
         // [START set_messaging_delegate]
         Messaging.messaging().delegate = self
@@ -28,8 +34,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
       //      options: authOptions,
       //      completionHandler: {_, _ in })
 
-// TODO: if we're using Firebase, uncomment next string
-        // application.registerForRemoteNotifications()
+// ENABLED 17 Aug 2026. Safe to call at every launch: this does NOT show a
+        // permission prompt (that is requestAuthorization, which stays in
+        // handlePushPermission and only runs when the user turns reminders on).
+        // It is what refreshes the APNs token for a user who has ALREADY
+        // granted permission — without it, a rotated token is never renewed
+        // and their reminders quietly stop arriving.
+        application.registerForRemoteNotifications()
 
         // [END register_for_notifications]
         return true
